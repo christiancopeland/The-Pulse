@@ -370,19 +370,20 @@ class EntityTrackingService:
         limit: int = 50,
         offset: int = 0
     ) -> List[Dict]:
-        """Get recent mentions of an entity from both documents and news articles"""
+        """Get recent mentions of an entity from documents, news articles, and news items"""
         try:
             entity_id = await self._get_entity_id(entity_name)
-            
-            # Updated query to handle both document and news article mentions
+
+            # BUG-002 FIX: Query handles all three source types including news_items
             query = text("""
                 WITH document_mentions AS (
-                    SELECT 
+                    SELECT
                         m.context,
                         m.timestamp,
-                        d.filename,
+                        d.filename as source_title,
                         m.document_id::text as document_id,
                         NULL::text as news_article_id,
+                        NULL::text as news_item_id,
                         p.project_id::text as project_id,
                         'document' as source_type
                     FROM entity_mentions m
@@ -392,24 +393,42 @@ class EntityTrackingService:
                     WHERE m.entity_id = :entity_id
                     AND m.document_id IS NOT NULL
                 ),
-                news_mentions AS (
-                    SELECT 
+                news_article_mentions AS (
+                    SELECT
                         m.context,
                         m.timestamp,
-                        na.title as filename,
+                        na.title as source_title,
                         NULL::text as document_id,
                         m.news_article_id::text as news_article_id,
+                        NULL::text as news_item_id,
                         NULL::text as project_id,
                         'news' as source_type
                     FROM entity_mentions m
                     JOIN news_articles na ON na.id = m.news_article_id
                     WHERE m.entity_id = :entity_id
                     AND m.news_article_id IS NOT NULL
+                ),
+                news_item_mentions AS (
+                    SELECT
+                        m.context,
+                        m.timestamp,
+                        ni.title as source_title,
+                        NULL::text as document_id,
+                        NULL::text as news_article_id,
+                        m.news_item_id::text as news_item_id,
+                        NULL::text as project_id,
+                        'news' as source_type
+                    FROM entity_mentions m
+                    JOIN news_items ni ON ni.id = m.news_item_id
+                    WHERE m.entity_id = :entity_id
+                    AND m.news_item_id IS NOT NULL
                 )
                 SELECT * FROM (
                     SELECT * FROM document_mentions
                     UNION ALL
-                    SELECT * FROM news_mentions
+                    SELECT * FROM news_article_mentions
+                    UNION ALL
+                    SELECT * FROM news_item_mentions
                 ) combined
                 ORDER BY timestamp DESC
                 LIMIT :limit OFFSET :offset
@@ -423,9 +442,10 @@ class EntityTrackingService:
             results = [{
                 "context": row.context,
                 "timestamp": row.timestamp,
-                "filename": row.filename,
+                "source_title": row.source_title,
                 "document_id": row.document_id,
                 "news_article_id": row.news_article_id,
+                "news_item_id": row.news_item_id,
                 "project_id": row.project_id,
                 "source_type": row.source_type
             } for row in result]

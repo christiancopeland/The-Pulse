@@ -19,7 +19,7 @@ ecdsa==0.19.0
 email_validator==2.2.0
 fastapi==0.115.6
 fastapi-cli==0.0.7
-firecrawl-py==1.10.0
+crawl4ai>=0.7.8
 fonttools==4.55.6
 greenlet==3.1.1
 grpcio==1.68.1
@@ -75,6 +75,8 @@ rich==13.9.4
 rich-toolkit==0.12.0
 rsa==4.9
 scipy==1.15.1
+sentence-transformers>=2.2.0
+gliner>=0.2.0
 setuptools==75.1.0
 shellingham==1.5.4
 six==1.17.0

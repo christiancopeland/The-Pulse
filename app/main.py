@@ -15,6 +15,11 @@ from .api.v1.websocket.routes import router as websocket_router
 from .api.v1.news.routes import router as news_routes
 from .api.v1.entities.routes import router as entities_router
 from .api.v1.research_assistant.routes import router as research_assistant_router
+from .api.v1.collection.routes import router as collection_router
+from .api.v1.processing.routes import router as processing_router
+from .api.v1.synthesis.routes import router as synthesis_router
+from .api.v1.network.routes import router as network_router
+from .api.v1.local.routes import router as local_router
 
 
 # Initialize FastAPI app
@@ -39,6 +44,11 @@ app.include_router(project_router, prefix="/api/v1/projects", tags=["projects"])
 app.include_router(news_routes, prefix="/api/v1/news", tags=["news"])
 app.include_router(entities_router, prefix="/api/v1/entities", tags=["entities"])
 app.include_router(research_assistant_router, prefix="/api/v1/research_assistant", tags=["research_assistant"])
+app.include_router(collection_router, prefix="/api/v1/collection", tags=["collection"])
+app.include_router(processing_router, prefix="/api/v1/processing", tags=["processing"])
+app.include_router(synthesis_router, prefix="/api/v1", tags=["synthesis"])
+app.include_router(network_router, prefix="/api/v1", tags=["network"])
+app.include_router(local_router, prefix="/api/v1", tags=["local-government"])
 
 
 
@@ -48,6 +58,11 @@ document_processor, redis_client, security_service, project_service = init_servi
 @app.get("/")
 async def root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
+
+@app.get("/dashboard")
+async def dashboard(request: Request):
+    """Serve the SIGINT-themed intelligence dashboard"""
+    return templates.TemplateResponse("dashboard.html", {"request": request})
 
 
 

@@ -4,9 +4,17 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 import os
 import logging
+from pathlib import Path
 from fastapi import HTTPException
 
-
+# Load .env file if it exists
+try:
+    from dotenv import load_dotenv
+    env_file = Path(__file__).parent.parent / '.env'
+    if env_file.exists():
+        load_dotenv(env_file)
+except ImportError:
+    pass  # dotenv not installed, rely on system env vars
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +24,7 @@ Base = declarative_base()
 # Get database URL from environment variable
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost/research_platform"
+    "postgresql+asyncpg://sna:sna_password@localhost/research_platform"
 )
 
 # Create async engine

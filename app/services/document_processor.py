@@ -2,9 +2,7 @@ from typing import Dict, List, Optional, Tuple, Union
 import PyPDF2
 from io import BytesIO
 import logging
-import backoff  # Add this to requirements.txt
-from tenacity import retry, stop_after_attempt, wait_exponential  # Add this to requirements.txt
-from openai import OpenAI, APIError, RateLimitError, APIConnectionError
+from tenacity import retry, stop_after_attempt, wait_exponential
 import asyncio
 import uuid
 import redis
@@ -21,6 +19,9 @@ from datetime import datetime
 from uuid import UUID
 import gc
 from sqlalchemy import text
+
+# Using local embeddings (sentence-transformers) instead of Ollama
+from app.services.local_embeddings import LocalEmbeddings as OllamaEmbeddings, LocalEmbeddingError as OllamaEmbeddingError
 
 
 logger = logging.getLogger(__name__)
@@ -51,70 +52,76 @@ class ConcurrentProcessingError(DocumentProcessingError):
 
 class DocumentProcessor:
     """Handles document processing and metadata extraction"""
-    
+
+    # Embedding configuration - using Ollama nomic-embed-text
+    EMBEDDING_DIMENSIONS = OllamaEmbeddings.DIMENSIONS  # 768
+
     def __init__(self):
         # Initialize Qdrant client
         self.qdrant = QdrantClient(
             host=os.getenv("QDRANT_HOST", "localhost"),
             port=int(os.getenv("QDRANT_PORT", 6333))
         )
-        
+
         # Initialize Redis client
         self.redis = redis.Redis(
             host=os.getenv("REDIS_HOST", "localhost"),
             port=int(os.getenv("REDIS_PORT", 6379)),
             db=0
         )
-        
+
+        # Initialize Ollama embeddings (local, no API key needed)
+        self.embeddings = OllamaEmbeddings()
+
         # Constants for text processing
         self.CHUNK_SIZE = 250  # Set fixed chunk size
         self.CHUNK_OVERLAP = 50  # Set fixed overlap
         MAX_CHUNKS = 1000
-        
+
         # Ensure collection exists
         self._init_collection()
-        
+
         # Retry configuration
         self.max_retries = 3
         self.max_backoff = 60  # Maximum backoff time in seconds
-        
+
         # Add thread pool for concurrent processing
         self.max_workers = os.getenv("MAX_PROCESSING_THREADS", 1)
         self.thread_pool = ThreadPoolExecutor(max_workers=self.max_workers)
-        
+
         # Chunk processing configuration
         self.batch_size = 2
-        
+
         self.processing_stats = ProcessingStats()
-        
+
         # Add timeout configurations
         self.page_timeout = int(os.getenv("PAGE_PROCESSING_TIMEOUT", 30))  # seconds
         self.chunk_timeout = int(os.getenv("CHUNK_PROCESSING_TIMEOUT", 60))  # seconds
-        
+
         # Add memory-related constraints
         self.max_document_size = 5 * 1024 * 1024  # 5MB limit
         self.max_concurrent_chunks = 5  # Limit concurrent chunk processing
     
     def _init_collection(self):
-        """Initialize Qdrant collection by recreating it each time"""
+        """Initialize Qdrant collection if it doesn't exist"""
         try:
-            # Drop collection if it exists
-            try:
-                self.qdrant.delete_collection("documents")
-                logger.info("Deleted existing 'documents' collection")
-            except Exception as e:
-                logger.debug(f"Collection might not exist, continuing: {str(e)}")
-            
-            # Create new collection
-            self.qdrant.create_collection(
-                collection_name="documents",
-                vectors_config=VectorParams(
-                    size=3072,  # text-embedding-3-large dimension size
-                    distance=Distance.COSINE
+            # Check if collection exists
+            collections = self.qdrant.get_collections()
+            collection_names = [c.name for c in collections.collections]
+
+            if "documents" not in collection_names:
+                # Create new collection with Ollama embedding dimensions
+                self.qdrant.create_collection(
+                    collection_name="documents",
+                    vectors_config=VectorParams(
+                        size=self.EMBEDDING_DIMENSIONS,  # 768 for nomic-embed-text
+                        distance=Distance.COSINE
+                    )
                 )
-            )
-            logger.info("Created new Qdrant collection: documents")
-            
+                logger.info(f"Created Qdrant collection: documents ({self.EMBEDDING_DIMENSIONS} dims)")
+            else:
+                logger.debug("Qdrant collection 'documents' already exists")
+
         except Exception as e:
             logger.error(f"Error initializing collection: {str(e)}")
             raise
@@ -216,7 +223,7 @@ class DocumentProcessor:
     @staticmethod
     def should_retry_exception(exception):
         """Predicate function to determine if we should retry on this exception"""
-        return isinstance(exception, (APIError, RateLimitError, APIConnectionError))
+        return isinstance(exception, OllamaEmbeddingError)
 
     @retry(
         stop=stop_after_attempt(3),
@@ -224,32 +231,21 @@ class DocumentProcessor:
         retry=should_retry_exception.__func__,
         before_sleep=lambda retry_state: logger.info(f"Retrying after {retry_state.outcome.exception()}")
     )
-    async def _generate_embedding(self, text: str, openai_client: OpenAI) -> List[float]:
-        """Generate embeddings using OpenAI's API with detailed logging"""
+    async def _generate_embedding(self, text: str) -> List[float]:
+        """Generate embeddings using Ollama's nomic-embed-text model"""
         start_time = time.time()
         logger.info(f"Starting embedding generation for text of length {len(text)}")
-        
+
         try:
-            response = openai_client.embeddings.create(
-                model="text-embedding-3-large",
-                input=text
-            )
+            embedding = await self.embeddings.generate(text)
             duration = time.time() - start_time
-            logger.info(f"Embedding generated successfully in {duration:.2f}s")
-            return response.data[0].embedding
-            
-        except RateLimitError as e:
-            logger.warning(f"Rate limit hit after {time.time() - start_time:.2f}s: {str(e)}")
-            raise EmbeddingGenerationError(f"Rate limit exceeded: {str(e)}")
-            
-        except APIConnectionError as e:
-            logger.warning(f"API connection error after {time.time() - start_time:.2f}s: {str(e)}")
-            raise EmbeddingGenerationError(f"Connection error: {str(e)}")
-            
-        except APIError as e:
-            logger.error(f"OpenAI API error after {time.time() - start_time:.2f}s: {str(e)}")
-            raise EmbeddingGenerationError(f"API error: {str(e)}")
-            
+            logger.info(f"Embedding generated successfully in {duration:.2f}s ({len(embedding)} dims)")
+            return embedding
+
+        except OllamaEmbeddingError as e:
+            logger.error(f"Ollama embedding error after {time.time() - start_time:.2f}s: {str(e)}")
+            raise EmbeddingGenerationError(f"Embedding error: {str(e)}")
+
         except Exception as e:
             logger.error(f"Unexpected error generating embedding after {time.time() - start_time:.2f}s: {str(e)}")
             raise EmbeddingGenerationError(f"Unexpected error: {str(e)}")
@@ -271,28 +267,9 @@ class DocumentProcessor:
         """Main PDF processing function with comprehensive logging"""
         start_time = time.time()
         logger.info("=== Starting PDF Processing ===")
-        
+
         try:
-            # API key validation
-            logger.info(f"Validating API key for client_id: {client_id}")
-            api_key = self.redis.get(f"api_key:{client_id}")
-            
-            if not api_key:
-                logger.error("No API key found in Redis")
-                raise DocumentProcessingError("No OpenAI API key found for this session")
-            
-            try:
-                api_key_str = api_key.decode()
-                logger.info("API key retrieved and decoded successfully")
-            except (AttributeError, UnicodeDecodeError) as e:
-                logger.error(f"API key decode error: {str(e)}")
-                raise DocumentProcessingError("Invalid API key format in session")
-            
-            # Initialize OpenAI client
-            openai_client = OpenAI(api_key=api_key_str)
-            logger.info("OpenAI client initialized")
-            
-            # Initialize PDF reader
+            # Initialize PDF reader (no API key needed for Ollama embeddings)
             pdf_reader = PyPDF2.PdfReader(file)
             doc_id = str(uuid.uuid4())
             logger.info(f"PDF reader initialized. Document ID: {doc_id}")
@@ -319,7 +296,7 @@ class DocumentProcessor:
                 try:
                     # Sanitize chunk before processing
                     sanitized_chunk = self._sanitize_text(chunk)
-                    embedding = await self._generate_embedding(sanitized_chunk, openai_client)
+                    embedding = await self._generate_embedding(sanitized_chunk)
                     chunk_id = await self._store_chunk(
                         doc_id=doc_id,
                         chunk_id=index,
@@ -478,21 +455,20 @@ class DocumentProcessor:
             return self._extract_page_text(page)
 
     async def _process_chunk_batch(
-        self, 
-        batch: List[str], 
+        self,
+        batch: List[str],
         start_idx: int,
         doc_id: str,
-        metadata: Dict,
-        openai_client: OpenAI
+        metadata: Dict
     ) -> List[Tuple[int, Union[str, Exception]]]:
         """Process a batch of chunks with enhanced error handling"""
         tasks = []
         for chunk_idx, chunk in enumerate(batch, start=start_idx):
             task = self._process_chunk_with_timeout(
-                chunk, chunk_idx, doc_id, metadata, openai_client
+                chunk, chunk_idx, doc_id, metadata
             )
             tasks.append(task)
-        
+
         return await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _process_chunk_with_timeout(self, *args, **kwargs) -> Tuple[int, Union[str, Exception]]:
@@ -528,13 +504,13 @@ class DocumentProcessor:
             logger.error(f"Error extracting text: {str(e)}")
             return ""
 
-    async def _process_chunk(self, chunk: str, index: int, doc_id: str, 
-                           metadata: Dict, openai_client: OpenAI) -> Optional[str]:
+    async def _process_chunk(self, chunk: str, index: int, doc_id: str,
+                             metadata: Dict) -> Optional[str]:
         """Process a single chunk with retries"""
         try:
-            # Generate embedding concurrently
-            embedding = await self._generate_embedding(chunk, openai_client)
-            
+            # Generate embedding using Ollama
+            embedding = await self._generate_embedding(chunk)
+
             # Store in Qdrant
             chunk_id = await self._store_chunk(
                 doc_id=doc_id,
@@ -543,9 +519,9 @@ class DocumentProcessor:
                 embedding=embedding,
                 metadata=metadata
             )
-            
+
             return chunk_id
-            
+
         except Exception as e:
             logger.error(f"Error processing chunk {index}: {str(e)}")
             return None
@@ -615,28 +591,17 @@ class DocumentProcessor:
     async def search_similar_chunks(self, query: str, limit: int = 5) -> List[Dict]:
         """Search for similar chunks using the query text"""
         try:
-            logger.debug(f"Starting search for query: {query[:50]}...")  # Log truncated query
-            
-            # Get API key from Redis
-            api_key = self.redis.get("api_key:default")
-            logger.debug(f"Retrieved API key from Redis: {'Present' if api_key else 'Missing'}")
-            
-            if not api_key:
-                raise DocumentProcessingError("No OpenAI API key found")
-            
-            # Create OpenAI client
-            openai_client = OpenAI(api_key=api_key.decode())
-            logger.debug("Created OpenAI client")
-            
-            # Generate embedding for the query
+            logger.debug(f"Starting search for query: {query[:50]}...")
+
+            # Generate embedding for the query using Ollama
             try:
                 logger.debug("Generating embedding for query...")
-                query_embedding = await self._generate_embedding(query, openai_client)
+                query_embedding = await self._generate_embedding(query)
                 logger.debug(f"Generated embedding of length: {len(query_embedding)}")
             except Exception as e:
                 logger.error(f"Error generating embedding: {str(e)}", exc_info=True)
                 raise
-            
+
             # Search Qdrant
             try:
                 logger.debug("Searching Qdrant...")
@@ -646,36 +611,29 @@ class DocumentProcessor:
                     limit=limit
                 )
                 logger.debug(f"Found {len(search_results)} results from Qdrant")
-                
-                # Log the type and structure of search_results
-                logger.debug(f"Search results type: {type(search_results)}")
-                logger.debug(f"First result type (if any): {type(search_results[0]) if search_results else 'No results'}")
-                
+
             except Exception as e:
                 logger.error(f"Error searching Qdrant: {str(e)}", exc_info=True)
                 raise
-            
+
             # Format results
             try:
                 logger.debug("Formatting search results...")
                 results = []
                 for result in search_results:
-                    logger.debug(f"Processing result: {type(result)}")
-                    logger.debug(f"Result attributes: {dir(result)}")
-                    
                     results.append({
                         'content': result.payload['content'],
                         'metadata': result.payload['metadata'],
                         'score': result.score
                     })
                 logger.debug(f"Formatted {len(results)} results")
-                
+
                 return results
-                
+
             except Exception as e:
                 logger.error(f"Error formatting results: {str(e)}", exc_info=True)
                 raise
-            
+
         except Exception as e:
             logger.error(f"Error in search_similar_chunks: {str(e)}", exc_info=True)
             raise
