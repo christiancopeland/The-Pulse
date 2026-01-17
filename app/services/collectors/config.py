@@ -261,6 +261,10 @@ CATEGORY_LABELS = {
     "pep": "Politically Exposed Persons",
     "crime": "Crime & Criminal Networks",
     "watchlist": "Watchlist Entities",
+    # New categories (Phase 4 - Data Source Expansion)
+    "humanitarian": "Humanitarian & Crisis",
+    "legal": "Legal & Court",
+    "terrorism": "Terrorism & Extremism",
 }
 
 # ACLED settings (FREE for research)

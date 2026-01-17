@@ -46,6 +46,19 @@ from .acled_collector import ACLEDCollector
 from .opensanctions_collector import OpenSanctionsCollector
 from .sec_edgar_collector import SECEdgarCollector
 
+# New FREE collectors (Phase 4 - Data Source Expansion)
+from .otx_collector import OTXCollector
+from .reliefweb_collector import ReliefWebCollector
+from .courtlistener_collector import CourtListenerCollector
+from .fbi_crime_collector import FBICrimeDataCollector
+from .hibp_collector import HIBPCollector
+from .hdx_collector import HDXCollector
+from .gtd_collector import GTDCollector
+from .eurostat_collector import EurostatCrimeCollector
+from .icews_collector import ICEWSCollector
+from .shodan_collector import ShodanCollector
+from .misp_collector import MISPCollector
+
 __all__ = [
     # Base classes
     "BaseCollector",
@@ -60,6 +73,18 @@ __all__ = [
     "ACLEDCollector",
     "OpenSanctionsCollector",
     "SECEdgarCollector",
+    # New FREE collectors (Phase 4 - Data Source Expansion)
+    "OTXCollector",
+    "ReliefWebCollector",
+    "CourtListenerCollector",
+    "FBICrimeDataCollector",
+    "HIBPCollector",
+    "HDXCollector",
+    "GTDCollector",
+    "EurostatCrimeCollector",
+    "ICEWSCollector",
+    "ShodanCollector",
+    "MISPCollector",
     # Scheduler
     "CollectionScheduler",
     # Factory function
@@ -114,6 +139,18 @@ def get_all_collectors(config: Optional[Dict[str, Any]] = None) -> List[BaseColl
         OpenSanctionsCollector(
             api_key=config.get("opensanctions_api_key") or os.getenv("OPENSANCTIONS_API_KEY"),
         ),
+
+        # ReliefWeb - FREE humanitarian data (no API key)
+        ReliefWebCollector(),
+
+        # CourtListener - FREE legal data (no API key, rate-limited)
+        CourtListenerCollector(),
+
+        # HDX - FREE humanitarian datasets (no API key)
+        HDXCollector(),
+
+        # Eurostat - FREE EU crime statistics (no API key)
+        EurostatCrimeCollector(),
     ]
 
     # ACLED - FREE for research (requires free registration)
@@ -124,6 +161,42 @@ def get_all_collectors(config: Optional[Dict[str, Any]] = None) -> List[BaseColl
             api_key=acled_key,
             email=acled_email,
         ))
+
+    # OTX - FREE threat intelligence (requires free API key)
+    otx_key = config.get("otx_api_key") or os.getenv("OTX_API_KEY")
+    if otx_key:
+        collectors.append(OTXCollector(api_key=otx_key))
+
+    # FBI Crime Data - FREE (requires free API key)
+    fbi_key = config.get("fbi_cde_api_key") or os.getenv("FBI_CDE_API_KEY")
+    if fbi_key:
+        collectors.append(FBICrimeDataCollector(api_key=fbi_key))
+
+    # HIBP - Paid ($3.50/mo API key)
+    hibp_key = config.get("hibp_api_key") or os.getenv("HIBP_API_KEY")
+    if hibp_key:
+        collectors.append(HIBPCollector(api_key=hibp_key))
+
+    # GTD - Bulk data (requires local file)
+    gtd_file = config.get("gtd_data_file") or os.getenv("GTD_DATA_FILE")
+    if gtd_file:
+        collectors.append(GTDCollector(data_file=gtd_file))
+
+    # ICEWS - Bulk data (requires local file)
+    icews_file = config.get("icews_data_file") or os.getenv("ICEWS_DATA_FILE")
+    if icews_file:
+        collectors.append(ICEWSCollector(data_file=icews_file))
+
+    # Shodan - Paid ($60-500/mo API key)
+    shodan_key = config.get("shodan_api_key") or os.getenv("SHODAN_API_KEY")
+    if shodan_key:
+        collectors.append(ShodanCollector(api_key=shodan_key))
+
+    # MISP - Self-hosted (requires instance URL and API key)
+    misp_url = config.get("misp_url") or os.getenv("MISP_URL")
+    misp_key = config.get("misp_api_key") or os.getenv("MISP_API_KEY")
+    if misp_url and misp_key:
+        collectors.append(MISPCollector(misp_url=misp_url, api_key=misp_key))
 
     # Reddit - FREE via public JSON API or OAuth
     reddit_client_id = config.get("reddit_client_id") or os.getenv("REDDIT_CLIENT_ID")
@@ -159,5 +232,56 @@ def get_collector_status() -> Dict[str, Dict[str, Any]]:
             "configured": bool(os.getenv("ACLED_API_KEY") and os.getenv("ACLED_EMAIL")),
             "cost": "FREE (research registration required)",
             "registration_url": "https://developer.acleddata.com/",
+        },
+        "otx": {
+            "configured": bool(os.getenv("OTX_API_KEY")),
+            "cost": "FREE (requires registration)",
+            "registration_url": "https://otx.alienvault.com/api",
+        },
+        "reliefweb": {
+            "configured": True,
+            "cost": "FREE (no registration required)",
+        },
+        "courtlistener": {
+            "configured": True,
+            "cost": "FREE (5000 requests/day limit)",
+        },
+        "fbi_crime": {
+            "configured": bool(os.getenv("FBI_CDE_API_KEY")),
+            "cost": "FREE (requires registration)",
+            "registration_url": "https://api.usa.gov/",
+        },
+        "hibp": {
+            "configured": bool(os.getenv("HIBP_API_KEY")),
+            "cost": "$3.50/mo",
+            "registration_url": "https://haveibeenpwned.com/API/Key",
+        },
+        "hdx": {
+            "configured": True,
+            "cost": "FREE (no registration required)",
+        },
+        "gtd": {
+            "configured": bool(os.getenv("GTD_DATA_FILE")),
+            "cost": "FREE (requires data download)",
+            "data_url": "https://www.start.umd.edu/gtd/",
+        },
+        "eurostat": {
+            "configured": True,
+            "cost": "FREE (no registration required)",
+        },
+        "icews": {
+            "configured": bool(os.getenv("ICEWS_DATA_FILE")),
+            "cost": "FREE (requires data download)",
+            "data_url": "https://dataverse.harvard.edu/dataverse/icews",
+        },
+        "shodan": {
+            "configured": bool(os.getenv("SHODAN_API_KEY")),
+            "cost": "$60-500/mo (paid tiers)",
+            "registration_url": "https://account.shodan.io/",
+        },
+        "misp": {
+            "configured": bool(os.getenv("MISP_URL") and os.getenv("MISP_API_KEY")),
+            "cost": "FREE (requires self-hosted instance)",
+            "docs_url": "https://www.misp-project.org/",
         },
     }
