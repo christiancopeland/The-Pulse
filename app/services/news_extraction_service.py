@@ -1,13 +1,28 @@
 from pydantic import BaseModel
 import requests
-from typing import List
+from typing import List, Optional
 import json
+import logging
 from datetime import datetime
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 from playwright.async_api import async_playwright
 import asyncio
 import time
+
+logger = logging.getLogger(__name__)
+
+# Import crawl4ai service
+try:
+    from app.services.crawl4ai_service import (
+        Crawl4AIService,
+        CRAWL4AI_AVAILABLE,
+        ExtractedArticle,
+    )
+except ImportError:
+    CRAWL4AI_AVAILABLE = False
+    logger.warning("crawl4ai_service not available, falling back to Firecrawl")
+
 
 class Article(BaseModel):
     title: str
@@ -20,9 +35,9 @@ class Extract(BaseModel):
 class Metadata(BaseModel):
     title: str
     description: str
-    favicon: str
-    language: str
-    keywords: str
+    favicon: str = ""
+    language: str = ""
+    keywords: str = ""
 
 class FirecrawlData(BaseModel):
     metadata: Metadata
@@ -47,8 +62,10 @@ class BatchResultResponse(BaseModel):
     data: List[FirecrawlData]
 
 class NewsExtractionService:
-    def __init__(self, api_url: str, api_key: str = None, filtered_phrases: List[str] = None):
+    def __init__(self, api_url: str = None, api_key: str = None, filtered_phrases: List[str] = None):
+        # api_url is now optional - we prefer crawl4ai
         self.api_url = api_url
+        self.use_crawl4ai = CRAWL4AI_AVAILABLE
         self.headers = {
             "Content-Type": "application/json"
         }
@@ -120,11 +137,74 @@ class NewsExtractionService:
     def extract_articles(self, target_url: str, force_scrape: bool = False) -> List[Article]:
         """
         Extract articles from a target URL.
-        
+
+        Uses crawl4ai as primary method, falls back to Firecrawl if unavailable.
+
         Args:
             target_url: The URL to extract articles from
             force_scrape: If True, bypass any caching and force new extraction
         """
+        start_time = time.time()
+        logger.info(f"[CRAWL] Starting article extraction: url={target_url}, force={force_scrape}")
+
+        # Try crawl4ai first
+        if self.use_crawl4ai:
+            try:
+                logger.debug(f"[CRAWL] Using crawl4ai for: {target_url}")
+                articles = asyncio.get_event_loop().run_until_complete(
+                    self._extract_articles_crawl4ai(target_url)
+                )
+                if articles:
+                    elapsed = time.time() - start_time
+                    logger.info(
+                        f"[CRAWL] crawl4ai SUCCESS: url={target_url}, "
+                        f"articles={len(articles)}, elapsed={elapsed:.2f}s"
+                    )
+                    for i, article in enumerate(articles[:5]):  # Log first 5
+                        logger.debug(f"[CRAWL]   [{i+1}] {article.title[:60]}...")
+                    return articles
+            except RuntimeError:
+                # No event loop running, create new one
+                articles = asyncio.run(self._extract_articles_crawl4ai(target_url))
+                if articles:
+                    elapsed = time.time() - start_time
+                    logger.info(
+                        f"[CRAWL] crawl4ai SUCCESS: url={target_url}, "
+                        f"articles={len(articles)}, elapsed={elapsed:.2f}s"
+                    )
+                    return articles
+            except Exception as e:
+                elapsed = time.time() - start_time
+                logger.warning(
+                    f"[CRAWL] crawl4ai FAILED after {elapsed:.2f}s, falling back to Firecrawl: {e}"
+                )
+
+        # Fall back to Firecrawl if crawl4ai not available or failed
+        if not self.api_url:
+            logger.warning(f"[CRAWL] No Firecrawl API URL configured and crawl4ai failed: {target_url}")
+            return []
+
+        return self._extract_articles_firecrawl(target_url, force_scrape)
+
+    async def _extract_articles_crawl4ai(self, target_url: str) -> List[Article]:
+        """Extract articles using crawl4ai service."""
+        async with Crawl4AIService() as service:
+            extracted = await service.extract_articles(target_url, use_llm=True)
+            return [
+                Article(title=a.title, heading=a.heading, url=a.url)
+                for a in extracted
+            ]
+
+    async def _scrape_with_crawl4ai(self, url: str, is_liveblog: bool = False) -> str:
+        """Scrape article content using crawl4ai service."""
+        async with Crawl4AIService() as service:
+            return await service.scrape_article_content(url, is_liveblog=is_liveblog)
+
+    def _extract_articles_firecrawl(self, target_url: str, force_scrape: bool = False) -> List[Article]:
+        """Extract articles using Firecrawl API (legacy fallback)."""
+        start_time = time.time()
+        logger.info(f"[FIRECRAWL] Starting extraction: url={target_url}")
+
         payload = {
             "url": target_url,
             "formats": ["extract"],
@@ -156,18 +236,18 @@ class NewsExtractionService:
                 - Public corruption or misconduct
                 - Legislative updates and regulatory changes
                 - Court proceedings and legal matters
-                
+
                 Don't neglect any of the above, but feel free to include other relevant news articles as well.""",
-                
+
                 "prompt": """Analyze the webpage and extract news articles related to:
                 1. Political events and developments
                 2. Criminal activities, investigations, law enforcement, and any general crime news
                 3. Government operations and policy changes
                 4. Public official activities and decisions
                 5. Court cases and legal proceedings
-                
+
                 Exclude articles about weather, sports, entertainment, or general human interest stories unless they directly relate to government activities, criminal investigations/activities, or the other topics listed previously.
-                
+
                 For each relevant article, return its title, heading, and URL in the specified format."""
             },
             "timeout": 30000,
@@ -177,20 +257,19 @@ class NewsExtractionService:
         }
 
         try:
-            print(f"Making request to {self.api_url} for URL: {target_url}")
+            logger.debug(f"[FIRECRAWL] POST request to {self.api_url}")
             response = requests.post(self.api_url, json=payload, headers=self.headers)
-            
-            print(f"Response status code: {response.status_code}")
-            print(f"Response headers: {dict(response.headers)}")
-            
+
+            logger.debug(f"[FIRECRAWL] Response: status={response.status_code}")
+
             # Save raw response to debug log file
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             debug_filename = f'firecrawl_debug_{timestamp}.json'
-            
+
             with open(debug_filename, 'w') as f:
                 try:
                     if response.status_code != 200:
-                        print(f"Error response body: {response.text}")
+                        logger.warning(f"[FIRECRAWL] Error response: {response.status_code}")
                         f.write(f"Status Code: {response.status_code}\n")
                         f.write(f"Headers: {dict(response.headers)}\n")
                         f.write(f"Body: {response.text}")
@@ -198,7 +277,7 @@ class NewsExtractionService:
                         formatted_json = json.dumps(response.json(), indent=2)
                         f.write(formatted_json)
                 except Exception as e:
-                    print(f"Error saving debug file: {e}")
+                    logger.error(f"[FIRECRAWL] Error saving debug file: {e}")
                     f.write(response.text)
 
             # Raise for status before parsing
@@ -209,17 +288,25 @@ class NewsExtractionService:
                 firecrawl_response = FirecrawlResponse.model_validate_json(response.text)
                 if not firecrawl_response.success:
                     raise ValueError(f"Firecrawl returned error: {response.text}")
-                return firecrawl_response.data.extract.articles
+
+                elapsed = time.time() - start_time
+                articles = firecrawl_response.data.extract.articles
+                logger.info(
+                    f"[FIRECRAWL] SUCCESS: url={target_url}, "
+                    f"articles={len(articles)}, elapsed={elapsed:.2f}s"
+                )
+                return articles
             except Exception as e:
-                print(f"Error parsing response: {e}")
-                print("Raw response:", response.text[:500])
+                logger.error(f"[FIRECRAWL] Parse error: {e}, response={response.text[:200]}")
                 raise ValueError(f"Failed to parse Firecrawl response: {str(e)}")
-                
+
         except requests.exceptions.RequestException as e:
-            print(f"Request error: {type(e).__name__}: {str(e)}")
+            elapsed = time.time() - start_time
+            logger.error(f"[FIRECRAWL] Request FAILED after {elapsed:.2f}s: {e}")
             raise ValueError(f"Failed to make request to Firecrawl: {str(e)}")
         except Exception as e:
-            print(f"Unexpected error: {type(e).__name__}: {str(e)}")
+            elapsed = time.time() - start_time
+            logger.error(f"[FIRECRAWL] Unexpected error after {elapsed:.2f}s: {e}")
             raise
 
     async def scrape_liveblog_content(self, url: str) -> str:
@@ -329,14 +416,43 @@ class NewsExtractionService:
     async def scrape_article_content(self, url: str, force_scrape: bool = False) -> str:
         """
         Scrape the main content from a news article URL.
-        
+
+        Uses crawl4ai as primary method, falls back to BeautifulSoup/Playwright.
+
         Args:
             url: The URL to scrape
             force_scrape: If True, bypass any caching and force a new scrape
-        
+
         Returns:
             The extracted text content
         """
+        start_time = time.time()
+        is_liveblog = 'liveblog' in url.lower()
+        logger.info(
+            f"[SCRAPE] Starting content scrape: url={url[:80]}, "
+            f"liveblog={is_liveblog}, force={force_scrape}"
+        )
+
+        # Try crawl4ai first
+        if self.use_crawl4ai:
+            try:
+                logger.debug(f"[SCRAPE] Using crawl4ai for content: {url[:80]}")
+                content = await self._scrape_with_crawl4ai(url, is_liveblog=is_liveblog)
+                if content and len(content) > 100:
+                    elapsed = time.time() - start_time
+                    logger.info(
+                        f"[SCRAPE] crawl4ai SUCCESS: url={url[:80]}, "
+                        f"chars={len(content)}, elapsed={elapsed:.2f}s"
+                    )
+                    return self._filter_content(content)
+                else:
+                    logger.warning(f"[SCRAPE] crawl4ai returned insufficient content ({len(content) if content else 0} chars)")
+            except Exception as e:
+                elapsed = time.time() - start_time
+                logger.warning(
+                    f"[SCRAPE] crawl4ai FAILED after {elapsed:.2f}s, falling back to Playwright/BS4: {e}"
+                )
+
         try:
             # Check if it's a liveblog or if force_scrape is True
             if force_scrape or 'liveblog' in url.lower():
@@ -450,15 +566,29 @@ class NewsExtractionService:
                     text_content.append(element.get_text().strip())
             
             final_content = '\n\n'.join(text for text in text_content if text.strip())
-            
+
             if not final_content:
+                logger.warning(f"[SCRAPE] No content extracted: url={url[:80]}")
                 raise ValueError("No text content found in article")
-            
+
+            elapsed = time.time() - start_time
+            logger.info(
+                f"[SCRAPE] BeautifulSoup SUCCESS: url={url[:80]}, "
+                f"chars={len(final_content)}, elapsed={elapsed:.2f}s"
+            )
             return self._filter_content(final_content)
-            
+
         except requests.exceptions.RequestException as e:
+            elapsed = time.time() - start_time
+            logger.error(
+                f"[SCRAPE] Request FAILED after {elapsed:.2f}s: url={url[:80]}, error={e}"
+            )
             raise ValueError(f"Failed to fetch article: {str(e)}")
         except Exception as e:
+            elapsed = time.time() - start_time
+            logger.error(
+                f"[SCRAPE] Extraction FAILED after {elapsed:.2f}s: url={url[:80]}, error={e}"
+            )
             raise ValueError(f"Failed to extract article content: {str(e)}")
 
     async def scrape_default_sources(self) -> dict:
