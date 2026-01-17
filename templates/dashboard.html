@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Pulse | Intelligence Platform</title>
+    <link rel="stylesheet" href="/static/css/sigint-theme.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <!-- Toast notification container -->
+    <div id="toast-container"></div>
+
+    <div class="dashboard-grid">
+        <!-- Header Bar -->
+        <header class="header-bar">
+            <div class="header-logo">
+                <div class="header-logo-icon"><i class="fas fa-broadcast-tower"></i></div>
+                <span class="header-title">The Pulse</span>
+            </div>
+
+            <nav class="header-nav">
+                <a href="#briefing" class="nav-item active" data-view="briefing">
+                    <i class="fas fa-file-alt"></i> Briefing
+                </a>
+                <a href="#feed" class="nav-item" data-view="feed">
+                    <i class="fas fa-rss"></i> Feed
+                </a>
+                <a href="#entities" class="nav-item" data-view="entities">
+                    <i class="fas fa-project-diagram"></i> Network
+                </a>
+                <a href="#entity-list" class="nav-item" data-view="entity-list">
+                    <i class="fas fa-list"></i> Entities
+                </a>
+                <a href="#research" class="nav-item" data-view="research">
+                    <i class="fas fa-search"></i> Research
+                </a>
+            </nav>
+
+            <div class="header-status">
+                <div class="header-health" id="system-health">
+                    <span class="status-indicator healthy"></span>
+                    <span>System Healthy</span>
+                </div>
+                <div class="header-timestamp" id="current-time"></div>
+            </div>
+
+            <button class="mobile-menu-btn" id="mobile-menu-toggle">
+                <i class="fas fa-bars"></i>
+            </button>
+        </header>
+
+        <!-- Left Sidebar: Collection Status -->
+        <aside class="sidebar" id="left-sidebar">
+            <!-- Collection Status -->
+            <div class="panel-section expanded">
+                <div class="panel-header">
+                    <span class="status-indicator healthy" id="collection-status-indicator"></span>
+                    <span>Collection Status</span>
+                    <i class="fas fa-chevron-down panel-header-toggle"></i>
+                </div>
+                <div class="panel-content no-padding">
+                    <ul class="collector-list" id="collector-status">
+                        <!-- Populated via WebSocket/API -->
+                        <li class="collector-item">
+                            <span class="status-indicator inactive"></span>
+                            <span class="collector-name">Loading...</span>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Quick Actions -->
+            <div class="panel-section expanded">
+                <div class="panel-header">
+                    <i class="fas fa-bolt panel-header-icon"></i>
+                    <span>Quick Actions</span>
+                    <i class="fas fa-chevron-down panel-header-toggle"></i>
+                </div>
+                <div class="panel-content">
+                    <div class="quick-actions">
+                        <div class="quick-action-item">
+                            <button class="btn btn-block" id="btn-run-collection">
+                                <i class="fas fa-sync-alt"></i> Run Collection
+                            </button>
+                            <p class="quick-action-desc">Fetch new articles from all configured news sources (RSS, GDELT, Reddit, etc.)</p>
+                        </div>
+                        <div class="quick-action-item">
+                            <button class="btn btn-block" id="btn-extract-entities">
+                                <i class="fas fa-users"></i> Extract Entities
+                            </button>
+                            <p class="quick-action-desc">Discover and track people, organizations, and locations from recent news using AI</p>
+                        </div>
+                        <div class="quick-action-item">
+                            <button class="btn btn-block btn-secondary" id="btn-bulk-extract">
+                                <i class="fas fa-layer-group"></i> Bulk Extract
+                            </button>
+                            <p class="quick-action-desc">Fast extraction from backlog (30 days, no WikiData). Run Enrich after.</p>
+                        </div>
+                        <div class="quick-action-item">
+                            <button class="btn btn-block btn-secondary" id="btn-enrich-entities">
+                                <i class="fas fa-database"></i> Enrich Entities
+                            </button>
+                            <p class="quick-action-desc">Add WikiData metadata to entities. Run multiple times for large backlogs.</p>
+                        </div>
+                        <div class="quick-action-item">
+                            <button class="btn btn-primary btn-block" id="btn-generate-briefing">
+                                <i class="fas fa-file-alt"></i> Generate Briefing
+                            </button>
+                            <p class="quick-action-desc">Analyze collected items and generate an AI-powered intelligence briefing</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Collection Stats -->
+            <div class="panel-section expanded">
+                <div class="panel-header">
+                    <i class="fas fa-chart-bar panel-header-icon"></i>
+                    <span>Statistics</span>
+                    <i class="fas fa-chevron-down panel-header-toggle"></i>
+                </div>
+                <div class="panel-content">
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-items-today">-</div>
+                            <div class="stat-label">Today</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-items-total">-</div>
+                            <div class="stat-label">Total</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-entities">-</div>
+                            <div class="stat-label">Entities</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-briefings">-</div>
+                            <div class="stat-label">Briefings</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- System Log -->
+            <div class="panel-section expanded">
+                <div class="panel-header">
+                    <i class="fas fa-terminal panel-header-icon"></i>
+                    <span>System Log</span>
+                    <i class="fas fa-chevron-down panel-header-toggle"></i>
+                </div>
+                <div class="panel-content no-padding">
+                    <div class="console-output" id="system-log">
+                        <div class="console-line">
+                            <span class="console-timestamp">--:--:--</span>
+                            <span class="console-level info">INFO</span>
+                            <span class="console-message">Connecting to system...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content" id="main-content">
+            <!-- Briefing View (Default) -->
+            <div class="view-container" id="view-briefing">
+                <div class="briefing-container" id="briefing-container">
+                    <!-- Loading State -->
+                    <div class="briefing-loading" id="briefing-loading">
+                        <div class="briefing-loading-spinner"></div>
+                        <span>Loading latest briefing...</span>
+                    </div>
+
+                    <!-- Empty State -->
+                    <div class="briefing-empty hidden" id="briefing-empty">
+                        <div class="briefing-empty-icon"><i class="fas fa-file-alt"></i></div>
+                        <div class="briefing-empty-text">No briefings available yet</div>
+                        <button class="btn btn-primary" id="btn-generate-first-briefing">
+                            <i class="fas fa-plus"></i> Generate Your First Briefing
+                        </button>
+                    </div>
+
+                    <!-- Briefing Content -->
+                    <div class="briefing-content hidden" id="briefing-content">
+                        <div class="briefing-header">
+                            <h1 class="briefing-title" id="briefing-title">Intelligence Briefing</h1>
+                            <div class="briefing-meta" id="briefing-meta">
+                                <span class="briefing-meta-item">
+                                    <i class="fas fa-calendar"></i>
+                                    <span id="briefing-date">--</span>
+                                </span>
+                                <span class="briefing-meta-item">
+                                    <i class="fas fa-clock"></i>
+                                    <span id="briefing-period">--</span>
+                                </span>
+                                <span class="briefing-meta-item">
+                                    <i class="fas fa-newspaper"></i>
+                                    <span id="briefing-items-count">-- items analyzed</span>
+                                </span>
+                            </div>
+                            <div class="briefing-actions">
+                                <button class="btn btn-sm" id="btn-play-audio">
+                                    <i class="fas fa-play"></i> Play Audio
+                                </button>
+                                <button class="btn btn-sm" id="btn-download-briefing">
+                                    <i class="fas fa-download"></i> Download
+                                </button>
+                                <button class="btn btn-sm" id="btn-regenerate-briefing">
+                                    <i class="fas fa-redo"></i> Regenerate
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Audio Player -->
+                        <div class="audio-player hidden" id="audio-player">
+                            <div class="audio-player-title">Audio Briefing</div>
+                            <div class="audio-player-controls">
+                                <button class="audio-play-btn" id="audio-play-btn">
+                                    <i class="fas fa-play"></i>
+                                </button>
+                                <div class="audio-progress">
+                                    <div class="audio-progress-bar" id="audio-progress-bar">
+                                        <div class="audio-progress-fill" id="audio-progress-fill"></div>
+                                    </div>
+                                    <div class="audio-time">
+                                        <span id="audio-current-time">0:00</span>
+                                        <span id="audio-duration">0:00</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <audio id="audio-element"></audio>
+                        </div>
+
+                        <!-- Executive Summary -->
+                        <div class="briefing-executive-summary" id="briefing-summary">
+                            <!-- Populated dynamically -->
+                        </div>
+
+                        <!-- Briefing Sections -->
+                        <div id="briefing-sections">
+                            <!-- Populated dynamically -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Feed View -->
+            <div class="view-container hidden" id="view-feed">
+                <div class="briefing-container">
+                    <div class="briefing-header" style="border-bottom-color: var(--accent-green);">
+                        <h1 class="briefing-title" style="color: var(--accent-green);">
+                            <i class="fas fa-rss"></i> News Feed
+                        </h1>
+                        <div class="search-container mt-md">
+                            <i class="fas fa-search search-icon"></i>
+                            <input type="text" class="search-input" id="feed-search"
+                                   placeholder="Search articles...">
+                        </div>
+                    </div>
+
+                    <div class="tabs">
+                        <button class="tab active" data-tab="all">All</button>
+                        <button class="tab" data-tab="geopolitics">Geopolitics</button>
+                        <button class="tab" data-tab="tech_ai">Tech/AI</button>
+                        <button class="tab" data-tab="local">Local</button>
+                        <button class="tab" data-tab="research">Research</button>
+                    </div>
+
+                    <ul class="news-list" id="news-feed">
+                        <!-- Populated dynamically -->
+                    </ul>
+
+                    <div class="empty-state hidden" id="feed-empty">
+                        <div class="empty-state-icon"><i class="fas fa-inbox"></i></div>
+                        <div class="empty-state-text">No articles found</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Entity Network View (Graph) -->
+            <div class="view-container hidden" id="view-entities">
+                <div class="briefing-container" style="max-width: none; padding: 0;">
+                    <div class="briefing-header" style="border-bottom-color: var(--accent-purple); padding: var(--spacing-md) var(--spacing-lg);">
+                        <h1 class="briefing-title" style="color: var(--accent-purple);">
+                            <i class="fas fa-project-diagram"></i> Entity Network
+                        </h1>
+                        <div class="briefing-actions">
+                            <!-- Search Input -->
+                            <div class="graph-search-wrapper">
+                                <i class="fas fa-search"></i>
+                                <input type="text" id="graph-entity-search" class="graph-search-input" placeholder="Search entities...">
+                                <div class="graph-search-results hidden" id="graph-search-results"></div>
+                            </div>
+                            <!-- Depth Selector -->
+                            <div class="graph-depth-wrapper">
+                                <label for="graph-depth-select">Depth:</label>
+                                <select id="graph-depth-select" class="graph-depth-select">
+                                    <option value="1" selected>1 hop</option>
+                                    <option value="2">2 hops</option>
+                                    <option value="3">3 hops</option>
+                                </select>
+                            </div>
+                            <button class="btn btn-sm" id="btn-graph-fullscreen">
+                                <i class="fas fa-expand"></i> Full Screen
+                            </button>
+                            <button class="btn btn-sm" id="btn-graph-fit">
+                                <i class="fas fa-compress-arrows-alt"></i> Fit
+                            </button>
+                            <button class="btn btn-sm" id="btn-graph-zoom-in">
+                                <i class="fas fa-plus"></i>
+                            </button>
+                            <button class="btn btn-sm" id="btn-graph-zoom-out">
+                                <i class="fas fa-minus"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="entity-graph-container" id="main-entity-graph">
+                        <!-- Sigma.js graph renders here -->
+                        <div class="graph-hint" id="graph-hint">
+                            <i class="fas fa-info-circle"></i> Click entity to lock view • Click tooltip for sources • Click background to reset
+                        </div>
+                        <div class="graph-legend">
+                            <span class="legend-item person"><span class="legend-dot"></span> Person</span>
+                            <span class="legend-item org"><span class="legend-dot"></span> Organization</span>
+                            <span class="legend-item location"><span class="legend-dot"></span> Location</span>
+                        </div>
+
+                        <!-- PERF-002: Layout progress indicator -->
+                        <div id="layout-progress-indicator" class="layout-indicator" style="display: none;">
+                            <div class="layout-spinner"></div>
+                            <span class="layout-text">Computing layout...</span>
+                        </div>
+
+                        <!-- PULSE-VIZ-001.6: Entity Sources Panel -->
+                        <div class="entity-sources-panel hidden" id="entity-sources-panel">
+                            <div class="sources-panel-header">
+                                <h3 id="sources-panel-title">Entity Sources</h3>
+                                <button class="sources-panel-close" onclick="pulseDashboard.hideSourcesPanel()">
+                                    <i class="fas fa-times"></i>
+                                </button>
+                            </div>
+                            <div class="sources-panel-content" id="sources-panel-content">
+                                <!-- Sources loaded dynamically -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- PULSE-VIZ-009: Entity Activity Timeline -->
+                    <div class="entity-timeline-container" id="entity-timeline-container">
+                        <div class="timeline-header">
+                            <h4 class="timeline-title">
+                                <i class="fas fa-clock"></i> Entity Activity Timeline
+                            </h4>
+                            <div class="timeline-controls">
+                                <button class="btn btn-sm timeline-btn" id="timeline-reset" title="Reset to full range">
+                                    <i class="fas fa-undo"></i>
+                                </button>
+                                <select class="timeline-period-select" id="timeline-period-select">
+                                    <option value="day">Daily</option>
+                                    <option value="week">Weekly</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="timeline-date-display">
+                            <span id="timeline-start-date">--</span>
+                            <span class="timeline-date-separator">to</span>
+                            <span id="timeline-end-date">--</span>
+                        </div>
+
+                        <div class="timeline-canvas-wrapper">
+                            <canvas id="entity-timeline-canvas"></canvas>
+                        </div>
+
+                        <div class="timeline-slider-wrapper">
+                            <input type="range"
+                                   id="timeline-range-start"
+                                   class="timeline-range-slider"
+                                   min="0" max="100" value="0">
+                            <input type="range"
+                                   id="timeline-range-end"
+                                   class="timeline-range-slider"
+                                   min="0" max="100" value="100">
+                        </div>
+
+                        <div class="timeline-legend">
+                            <span class="legend-item">
+                                <span class="legend-bar low"></span> Low Activity
+                            </span>
+                            <span class="legend-item">
+                                <span class="legend-bar medium"></span> Medium
+                            </span>
+                            <span class="legend-item">
+                                <span class="legend-bar high"></span> High Activity
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Entity List View -->
+            <div class="view-container hidden" id="view-entity-list">
+                <div class="briefing-container" style="max-width: 1200px;">
+                    <div class="briefing-header" style="border-bottom-color: var(--accent-purple);">
+                        <h1 class="briefing-title" style="color: var(--accent-purple);">
+                            <i class="fas fa-list"></i> Tracked Entities
+                        </h1>
+                    </div>
+
+                    <div class="entity-list-container">
+                        <!-- Toolbar -->
+                        <div class="entity-list-toolbar">
+                            <div class="entity-list-search">
+                                <i class="fas fa-search"></i>
+                                <input type="text" id="entity-list-search-input" placeholder="Search entities...">
+                            </div>
+                            <div class="entity-list-filters">
+                                <select id="entity-list-type-filter">
+                                    <option value="">All Types</option>
+                                    <option value="person">Person</option>
+                                    <option value="org">Organization</option>
+                                    <option value="location">Location</option>
+                                </select>
+                                <select id="entity-list-sort">
+                                    <option value="mentions">Most Mentions</option>
+                                    <option value="name">Name A-Z</option>
+                                    <option value="recent">Recently Added</option>
+                                </select>
+                            </div>
+                            <div class="entity-list-bulk-actions">
+                                <button class="btn btn-sm" id="btn-entity-merge" disabled>
+                                    <i class="fas fa-compress-alt"></i> Merge (<span id="merge-count">0</span>)
+                                </button>
+                                <button class="btn btn-sm btn-danger" id="btn-entity-delete" disabled>
+                                    <i class="fas fa-trash"></i> Delete (<span id="delete-count">0</span>)
+                                </button>
+                                <button class="btn btn-sm" id="btn-entity-export" disabled>
+                                    <i class="fas fa-download"></i> Export
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Entity Table -->
+                        <table class="entity-table">
+                            <thead>
+                                <tr>
+                                    <th class="entity-checkbox">
+                                        <input type="checkbox" id="entity-select-all">
+                                    </th>
+                                    <th data-sort="name">Name <i class="fas fa-sort"></i></th>
+                                    <th data-sort="type">Type <i class="fas fa-sort"></i></th>
+                                    <th data-sort="mentions">Mentions <i class="fas fa-sort"></i></th>
+                                    <th data-sort="wikidata">WikiData <i class="fas fa-sort"></i></th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="entity-table-body">
+                                <!-- Populated dynamically -->
+                            </tbody>
+                        </table>
+
+                        <!-- Pagination -->
+                        <div class="entity-list-pagination">
+                            <div class="pagination-info">
+                                Showing <span id="entity-page-start">0</span>-<span id="entity-page-end">0</span> of <span id="entity-total">0</span> entities
+                            </div>
+                            <div class="pagination-controls">
+                                <button class="btn btn-sm" id="btn-entity-prev" disabled>
+                                    <i class="fas fa-chevron-left"></i> Previous
+                                </button>
+                                <button class="btn btn-sm" id="btn-entity-next" disabled>
+                                    Next <i class="fas fa-chevron-right"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Research View -->
+            <div class="view-container hidden" id="view-research">
+                <div class="briefing-container">
+                    <div class="briefing-header" style="border-bottom-color: var(--accent-amber);">
+                        <h1 class="briefing-title" style="color: var(--accent-amber);">
+                            <i class="fas fa-search"></i> Semantic Search
+                        </h1>
+                    </div>
+
+                    <div class="search-container">
+                        <i class="fas fa-search search-icon"></i>
+                        <input type="text" class="search-input" id="semantic-search"
+                               placeholder="Search by meaning... (e.g., 'AI developments in defense')">
+                    </div>
+
+                    <div class="mt-lg" id="search-results">
+                        <div class="empty-state">
+                            <div class="empty-state-icon"><i class="fas fa-search"></i></div>
+                            <div class="empty-state-text">Enter a query to search your knowledge base</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Right Panel: Entity Highlights & Activity -->
+        <aside class="right-panel" id="right-panel">
+            <!-- Recent Activity Timeline -->
+            <div class="panel-section expanded">
+                <div class="panel-header">
+                    <i class="fas fa-history panel-header-icon text-cyan"></i>
+                    <span>Recent Activity</span>
+                    <i class="fas fa-chevron-down panel-header-toggle"></i>
+                </div>
+                <div class="panel-content">
+                    <div class="timeline" id="activity-timeline">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Archived Briefings -->
+            <div class="panel-section">
+                <div class="panel-header">
+                    <i class="fas fa-archive panel-header-icon"></i>
+                    <span>Briefing Archive</span>
+                    <i class="fas fa-chevron-down panel-header-toggle"></i>
+                </div>
+                <div class="panel-content no-padding">
+                    <ul class="news-list" id="briefing-archive">
+                        <!-- Populated dynamically -->
+                    </ul>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <!-- Full-Screen Graph Modal -->
+    <div class="fullscreen-graph-modal hidden" id="fullscreen-graph-modal">
+        <div class="fullscreen-graph-header">
+            <h2><i class="fas fa-project-diagram"></i> Entity Network</h2>
+            <button class="btn btn-sm" id="btn-close-fullscreen-graph">
+                <i class="fas fa-times"></i> Close
+            </button>
+        </div>
+        <div class="fullscreen-graph-controls">
+            <div class="graph-search-wrapper">
+                <i class="fas fa-search"></i>
+                <input type="text" class="graph-search-input" id="fullscreen-graph-search" placeholder="Search entities...">
+                <div class="graph-search-results hidden" id="fullscreen-search-results"></div>
+            </div>
+            <div class="graph-depth-wrapper">
+                <label for="fullscreen-depth-select">Depth:</label>
+                <select id="fullscreen-depth-select" class="graph-depth-select">
+                    <option value="1" selected>1 hop</option>
+                    <option value="2">2 hops</option>
+                    <option value="3">3 hops</option>
+                </select>
+            </div>
+            <button class="btn-icon" id="btn-fullscreen-zoom-in" title="Zoom In">
+                <i class="fas fa-plus"></i>
+            </button>
+            <button class="btn-icon" id="btn-fullscreen-zoom-out" title="Zoom Out">
+                <i class="fas fa-minus"></i>
+            </button>
+            <button class="btn-icon" id="btn-fullscreen-fit" title="Fit to View">
+                <i class="fas fa-compress-arrows-alt"></i>
+            </button>
+        </div>
+        <div class="fullscreen-graph-body">
+            <div id="fullscreen-entity-graph">
+                <div class="graph-legend">
+                    <span class="legend-item person"><span class="legend-dot"></span> Person</span>
+                    <span class="legend-item org"><span class="legend-dot"></span> Organization</span>
+                    <span class="legend-item location"><span class="legend-dot"></span> Location</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="/static/js/d3.v7.min.js"></script>
+    <!-- Sigma.js v2 + graphology for WebGL graph rendering (replaces Cytoscape.js) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/graphology/0.25.4/graphology.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sigma.js/2.4.0/sigma.min.js"></script>
+    <!-- PULSE-VIZ-002: ForceAtlas2 layout for better cluster separation (bundled locally) -->
+    <script src="/static/js/forceatlas2.min.js"></script>
+    <!-- PERF-001: FA2Layout Web Worker for non-blocking layout computation
+         Bundled via: node build-fa2-worker.js (uses esbuild) -->
+    <script src="/static/js/fa2layout.bundle.js"></script>
+    <script src="/static/js/marked.min.js"></script>
+    <script src="/static/js/pulse-dashboard.js"></script>
+</body>
+</html>
