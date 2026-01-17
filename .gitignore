@@ -46,3 +46,16 @@ data/
 # OS
 .DS_Store
 Thumbs.db
+
+# Internal planning docs (not for version control)
+0-CustomClaude-CheatSheet.md
+ADAPT_INTEL_BRIEF_BEST_PRACTICES.md
+Claude_Pulse_PROBLEMS.md
+ENTITY_EXTRACTION_IMPROVEMENTS_PLAN.md
+IMPLEMENTATION_PLAN.md
+INTELLIGENCE_MODULES_IMPLEMENTATION_PLAN.md
+PULSE_INTELLIGENCE_IMPROVEMENTS.md
+THE_PULSE_INTEGRATION_PLAN.md
+
+# Node modules
+node_modules/
