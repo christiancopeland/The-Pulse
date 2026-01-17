@@ -164,4 +164,16 @@ Collectors:
 
 ---
 
+---
+
+## Technical Debt
+
+### GitHub Dependabot Vulnerabilities
+
+GitHub flagged 20 vulnerabilities on push (2 critical, 8 high, 9 moderate, 1 low). Likely in `node_modules` dependencies from the FA2 worker bundling.
+
+**Action needed:** Review https://github.com/christiancopeland/The-Pulse/security/dependabot
+
+---
+
 *Session ended: 2026-01-16*

@@ -1719,4 +1719,16 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 ---
 
+---
+
+## Known Issues / Technical Debt
+
+### Dependabot Vulnerabilities (2026-01-16)
+
+GitHub flagged 20 vulnerabilities (2 critical, 8 high, 9 moderate, 1 low). Likely in `node_modules` dependencies from FA2 worker bundling (`package.json` dependencies: esbuild, graphology-layout-forceatlas2).
+
+**Review:** https://github.com/christiancopeland/The-Pulse/security/dependabot
+
+---
+
 *Last updated: 2026-01-16 (Server-Side Network API Optimization - 77x latency improvement)*
