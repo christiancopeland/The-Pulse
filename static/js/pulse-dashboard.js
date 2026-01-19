@@ -904,7 +904,7 @@ class PulseDashboard {
 
         try {
             this.log('info', 'Enriching entities with WikiData...');
-            const result = await this.fetchApi('/processing/enrich-entities?limit=100', {
+            const result = await this.fetchApi('/processing/enrich-entities?limit=500', {
                 method: 'POST'
             });
 
@@ -1839,16 +1839,21 @@ class PulseDashboard {
 
     /**
      * PULSE-VIZ-015: Enhanced semantic zoom with detail level switching
-     * Set up semantic zoom - adjust label density and detail level based on zoom
+     * SMOOTH-ZOOM: Now uses continuous progressive visibility instead of discrete levels
      */
     setupSemanticZoom(sigma, graph) {
-        // Store current detail level to avoid redundant updates
-        this.currentDetailLevel = 'full';  // 'overview' | 'partial' | 'full'
-
         // Store references for semantic zoom methods
         this.currentGraph = graph;
         this.currentSigma = sigma;
 
+        // Reset progressive visibility tracking
+        this._lastVisibleCount = undefined;
+        this._lastShowClusters = undefined;
+        this._visibilityAnimation = null;
+
+        // Note: cameraUpdated doesn't fire reliably for animated zooms in this Sigma.js version
+        // The zoom button handlers call updateDetailLevel directly instead
+        // This handler catches mouse wheel zoom and other direct camera manipulations
         sigma.on('cameraUpdated', () => {
             const ratio = sigma.getCamera().ratio;
 
@@ -1927,6 +1932,8 @@ class PulseDashboard {
             }
 
             // Add cluster super-node
+            // Note: Don't set type:'cluster' as Sigma has no such program
+            // Use isCluster:true flag for identification instead
             this.currentGraph.addNode(nodeId, {
                 label: cluster.label,
                 x: x,
@@ -1935,7 +1942,6 @@ class PulseDashboard {
                 originalSize: size,
                 color: this.getClusterColor(cluster.dominant_type),
                 baseColor: this.getClusterColor(cluster.dominant_type),
-                type: 'cluster',  // Mark as cluster for special handling
                 isCluster: true,
                 clusterData: cluster,
                 entityType: cluster.dominant_type?.toLowerCase() || 'unknown'
@@ -1987,52 +1993,54 @@ class PulseDashboard {
 
     /**
      * PULSE-VIZ-016: Update graph detail level based on zoom ratio
-     * PERF-000: Fixed threshold direction - Sigma.js ratio INCREASES when zooming OUT
+     * SMOOTH-ZOOM: Progressive visibility with animated transitions
      *
-     * Detail levels:
-     * - 'overview': ratio > 3.0 - clusters only (zoomed out far)
-     * - 'partial':  1.5 < ratio <= 3.0 - clusters + top-20 by centrality
-     * - 'full':     ratio <= 1.5 - all nodes (zoomed in)
+     * Uses continuous calculation instead of hard thresholds:
+     * - visibleFraction = clamp(1 / ratio, 0.02, 1.0)
+     * - At ratio=1: show 100% of nodes
+     * - At ratio=2: show 50% of nodes
+     * - At ratio=4: show 25% of nodes
+     * - Minimum 2% ensures at least top entities always visible
      */
     updateDetailLevel(ratio) {
-        // Skip if no clusters available (semantic zoom not applicable)
-        if (!this.clusters || this.clusters.length === 0) {
-            return;
+        const graph = this.currentGraph;
+        if (!graph) return;
+
+        // Count non-cluster nodes
+        let totalNodes = 0;
+        graph.forEachNode((nodeId, attrs) => {
+            if (!attrs.isCluster) totalNodes++;
+        });
+
+        if (totalNodes === 0) return;
+
+        // Calculate target visible count using continuous function
+        // visibleFraction decreases as ratio increases (zooming out)
+        const visibleFraction = Math.min(1.0, Math.max(0.02, 1.0 / ratio));
+        const targetVisibleCount = Math.max(5, Math.floor(totalNodes * visibleFraction));
+
+        // Determine if we should show clusters (zoomed out significantly)
+        const showClusters = ratio > 2.0 && this.clusters && this.clusters.length > 0;
+
+        // Track previous state for logging
+        const previousCount = this._lastVisibleCount || totalNodes;
+
+        // Skip if change is too small (< 5% change)
+        if (this._lastVisibleCount !== undefined) {
+            const changePct = Math.abs(targetVisibleCount - previousCount) / totalNodes;
+            if (changePct < 0.05 && showClusters === this._lastShowClusters) {
+                return;
+            }
         }
 
-        // Determine target level - ratio INCREASES when zooming OUT
-        let targetLevel;
-        if (ratio > 3.0) {
-            targetLevel = 'overview';  // Zoomed out far
-        } else if (ratio > 1.5) {
-            targetLevel = 'partial';   // Zoomed out some
-        } else {
-            targetLevel = 'full';      // Default / zoomed in
-        }
+        this.log('info', `Semantic zoom: ratio=${ratio.toFixed(2)}, showing ${targetVisibleCount}/${totalNodes} nodes (${(visibleFraction * 100).toFixed(0)}%)`);
 
-        // Skip if no change
-        if (targetLevel === this.currentDetailLevel) return;
+        // Store for next comparison
+        this._lastVisibleCount = targetVisibleCount;
+        this._lastShowClusters = showClusters;
 
-        this.log('info', `Switching detail level: ${this.currentDetailLevel} → ${targetLevel} (ratio: ${ratio.toFixed(2)})`);
-
-        const previousLevel = this.currentDetailLevel;
-        this.currentDetailLevel = targetLevel;
-
-        // Apply visibility based on new level
-        switch (targetLevel) {
-            case 'overview':
-                this.applyOverviewMode();
-                break;
-            case 'partial':
-                this.applyPartialMode();
-                break;
-            case 'full':
-                this.applyFullMode();
-                break;
-        }
-
-        // Refresh render
-        this.scheduleRefresh();
+        // Apply progressive visibility with animation
+        this.applyProgressiveVisibility(targetVisibleCount, showClusters);
     }
 
     /**
@@ -2136,6 +2144,146 @@ class PulseDashboard {
         });
 
         this.log('info', `Full mode: showing ${graph.order} entities`);
+    }
+
+    /**
+     * SMOOTH-ZOOM: Apply progressive visibility with animated transitions
+     * Shows top N entities by centrality with fade-in/fade-out animation
+     * @param {number} targetCount - Number of entities to show
+     * @param {boolean} showClusters - Whether to show cluster super-nodes
+     */
+    applyProgressiveVisibility(targetCount, showClusters) {
+        const graph = this.currentGraph;
+        if (!graph) return;
+
+        // Cancel any ongoing animation
+        if (this._visibilityAnimation) {
+            cancelAnimationFrame(this._visibilityAnimation);
+            this._visibilityAnimation = null;
+        }
+
+        // Get all entities sorted by centrality
+        const rankedEntities = this.getTopEntitiesByCentrality(graph.order);
+        const visibleSet = new Set(rankedEntities.slice(0, targetCount).map(e => e.id));
+
+        // Handle cluster nodes
+        if (showClusters) {
+            if (!this.clusterNodeIds || this.clusterNodeIds.size === 0) {
+                this.addClusterNodes();
+            }
+            this.clusterNodeIds?.forEach(nodeId => {
+                graph.setNodeAttribute(nodeId, 'hidden', false);
+            });
+        } else {
+            this.removeClusterNodes();
+        }
+
+        // Collect nodes that need visibility changes
+        const nodesToShow = [];
+        const nodesToHide = [];
+
+        graph.forEachNode((nodeId, attrs) => {
+            if (attrs.isCluster) return;
+
+            const shouldBeVisible = visibleSet.has(nodeId);
+            const isCurrentlyVisible = !attrs.hidden;
+            const currentOpacity = attrs._targetOpacity ?? (isCurrentlyVisible ? 1 : 0);
+
+            if (shouldBeVisible && !isCurrentlyVisible) {
+                nodesToShow.push({ id: nodeId, currentOpacity: 0 });
+            } else if (!shouldBeVisible && isCurrentlyVisible) {
+                nodesToHide.push({ id: nodeId, currentOpacity: 1 });
+            }
+        });
+
+        // If no changes needed, just update edges
+        if (nodesToShow.length === 0 && nodesToHide.length === 0) {
+            this.updateEdgeVisibility();
+            if (showClusters) this.updateClusterBadges();
+            this.scheduleRefresh();
+            return;
+        }
+
+        // Animation parameters
+        const duration = 250; // ms
+        const startTime = performance.now();
+
+        // Store original colors for nodes being animated
+        nodesToShow.forEach(node => {
+            const attrs = graph.getNodeAttributes(node.id);
+            node.originalColor = attrs.color || '#00d4ff';
+            // Start hidden, will fade in
+            graph.setNodeAttribute(node.id, 'hidden', false);
+            graph.setNodeAttribute(node.id, 'color', this.adjustColorOpacity(node.originalColor, 0));
+        });
+
+        nodesToHide.forEach(node => {
+            const attrs = graph.getNodeAttributes(node.id);
+            node.originalColor = attrs.color || '#00d4ff';
+        });
+
+        // Animation loop
+        const animate = (currentTime) => {
+            const elapsed = currentTime - startTime;
+            const progress = Math.min(1, elapsed / duration);
+            // Ease-out cubic for smooth deceleration
+            const eased = 1 - Math.pow(1 - progress, 3);
+
+            // Fade in nodes
+            nodesToShow.forEach(node => {
+                const opacity = eased;
+                graph.setNodeAttribute(node.id, 'color', this.adjustColorOpacity(node.originalColor, opacity));
+                graph.setNodeAttribute(node.id, '_targetOpacity', opacity);
+            });
+
+            // Fade out nodes
+            nodesToHide.forEach(node => {
+                const opacity = 1 - eased;
+                graph.setNodeAttribute(node.id, 'color', this.adjustColorOpacity(node.originalColor, opacity));
+                graph.setNodeAttribute(node.id, '_targetOpacity', opacity);
+            });
+
+            // Continue animation or finish
+            if (progress < 1) {
+                this._visibilityAnimation = requestAnimationFrame(animate);
+                // Refresh at intervals during animation
+                if (elapsed % 50 < 16) this.scheduleRefresh();
+            } else {
+                // Animation complete - finalize states
+                nodesToShow.forEach(node => {
+                    graph.setNodeAttribute(node.id, 'color', node.originalColor);
+                    graph.setNodeAttribute(node.id, '_targetOpacity', 1);
+                });
+
+                nodesToHide.forEach(node => {
+                    graph.setNodeAttribute(node.id, 'hidden', true);
+                    graph.setNodeAttribute(node.id, 'color', node.originalColor);
+                    graph.setNodeAttribute(node.id, '_targetOpacity', 0);
+                });
+
+                this._visibilityAnimation = null;
+                this.updateEdgeVisibility();
+                if (showClusters) this.updateClusterBadges();
+                this.scheduleRefresh();
+            }
+        };
+
+        // Start animation
+        this._visibilityAnimation = requestAnimationFrame(animate);
+    }
+
+    /**
+     * SMOOTH-ZOOM: Update edge visibility based on node visibility
+     */
+    updateEdgeVisibility() {
+        const graph = this.currentGraph;
+        if (!graph) return;
+
+        graph.forEachEdge((edgeId, attrs, source, target) => {
+            const sourceVisible = !graph.getNodeAttribute(source, 'hidden');
+            const targetVisible = !graph.getNodeAttribute(target, 'hidden');
+            graph.setEdgeAttribute(edgeId, 'hidden', !sourceVisible || !targetVisible);
+        });
     }
 
     /**
@@ -4077,19 +4225,47 @@ class PulseDashboard {
         }
 
         btnZoomIn?.addEventListener('click', () => {
-            console.log('[DEBUG] Zoom In clicked, sigma:', this.sigma);
             if (this.sigma) {
                 const camera = this.sigma.getCamera();
                 camera.animatedZoom({ duration: 200 });
+                // Update detail level after animation completes
+                setTimeout(() => {
+                    const ratio = camera.ratio;
+                    this.updateDetailLevel(ratio);
+                    // Also update label density
+                    if (ratio > 3.0) {
+                        this.sigma.setSetting('labelDensity', 0.02);
+                    } else if (ratio > 2.0) {
+                        this.sigma.setSetting('labelDensity', 0.04);
+                    } else if (ratio > 1.0) {
+                        this.sigma.setSetting('labelDensity', 0.07);
+                    } else {
+                        this.sigma.setSetting('labelDensity', 0.15);
+                    }
+                }, 250);
                 this.log('info', 'Zoomed in');
             }
         });
 
         btnZoomOut?.addEventListener('click', () => {
-            console.log('[DEBUG] Zoom Out clicked, sigma:', this.sigma);
             if (this.sigma) {
                 const camera = this.sigma.getCamera();
                 camera.animatedUnzoom({ duration: 200 });
+                // Update detail level after animation completes
+                setTimeout(() => {
+                    const ratio = camera.ratio;
+                    this.updateDetailLevel(ratio);
+                    // Also update label density
+                    if (ratio > 3.0) {
+                        this.sigma.setSetting('labelDensity', 0.02);
+                    } else if (ratio > 2.0) {
+                        this.sigma.setSetting('labelDensity', 0.04);
+                    } else if (ratio > 1.0) {
+                        this.sigma.setSetting('labelDensity', 0.07);
+                    } else {
+                        this.sigma.setSetting('labelDensity', 0.15);
+                    }
+                }, 250);
                 this.log('info', 'Zoomed out');
             }
         });
